@@ -1,6 +1,8 @@
 import numpy as np
 import collections
 
+from support import softmax_vectorized
+
 # This is a simple Recursive Neural Netowrk with one ReLU Layer and a softmax layer
 # TODO: You must update the forward and backward propogation functions of this file.
 
@@ -120,23 +122,22 @@ class RNN:
             h_left, h_right = node.left.hActs1, node.right.hActs1
 
             # Combine children
-            z = np.dot(self.W, np.vstack([h_left, h_right])) + self.b
-            self.hActs1 = z
-            self.hActs1[self.hActs1 < 0] = 0 # ReLU
+            z = np.dot(self.W, np.vstack([h_left, h_right])) + self.b.reshape(self.wvecDim, 1)
+            node.hActs1 = z
+            node.hActs1[node.hActs1 < 0] = 0 # ReLU
 
         # Now the two cases are on equal footing!
-        scores = np.dot(self.Ws, self.HActs1) + self.bs
-        node.probs = softmax(scores)
+        scores = np.dot(self.Ws, node.hActs1) + self.bs.reshape(self.outputDim, 1)
+        node.probs = softmax_vectorized(scores)
         y_hat, y = node.probs.argmax(), node.label
 
-        guesses += [y_hat]
+        guess += [y_hat]
         correct += [y]
-        cost += -np.log(probs[y])
+        cost += -np.log(node.probs[y])
 
         node.fprop = True
 
         return cost, total + 1
-
 
     def backProp(self,node,error=None):
 
@@ -150,33 +151,35 @@ class RNN:
         #  - error: error that has been passed down from a previous iteration
         ################
 
+        error = error if type(error) == np.ndarray else np.zeros_like(node.hActs1) 
+
         dscores = node.probs
         dscores[node.label] -= 1
 
         # Local prediction error
-        self.dbs += dscores
+        self.dbs += dscores.ravel()
         self.dWs += np.dot(dscores, node.hActs1.T)
         dhidden_local = np.dot(self.Ws.T, dscores)
         dhidden = dhidden_local + error # incorporate downstream error
 
         if node.isLeaf:
-            self.dL[:, node.word] = dhidden
+            self.dL[node.word] = dhidden.ravel()
             return # done
 
         # Not done - need to pass on error signal to children
-        dz_local = np.ones_like(z)
-        dz_local[z < 0] = 0 # don't give false hope to the negative numbers for impacting the loss
+        dz_local = np.ones_like(node.hActs1)
+        dz_local[node.hActs1 == 0] = 0 # don't give false hope to the negative numbers for impacting the loss
         dz = dz_local * dhidden
 
-        self.db += dz
-        C = np.vstack([node.left, node.right])
+        self.db += dz.ravel()
+        C = np.vstack([node.left.hActs1, node.right.hActs1])
         self.dW += np.dot(dz, C.T)
 
         dC = np.dot(self.W.T, dz)
 
         # Send error signal to children
-        self.backProp(node.left, error=dC[:self.wVecDim])
-        self.backProp(node.right, error=dC[self.wVecDim:])
+        self.backProp(node.left, error=dC[:self.wvecDim])
+        self.backProp(node.right, error=dC[self.wvecDim:])
 
     def updateParams(self,scale,update,log=False):
         """
